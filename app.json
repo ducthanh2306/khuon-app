@@ -1,25 +1,63 @@
 {
   "expo": {
-    "name": "khuon-app",
+    "name": "KHUÔN — Text, Vault & QR",
     "slug": "khuon-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "KHUÔN sử dụng camera để quét mã QR, VietQR và Wi-Fi QR."
+      }
     },
     "android": {
+      "package": "app.khuon.tools",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#141413",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "predictiveBackGestureEnabled": true
     },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F4F3EF",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "dark": {
+            "image": "./assets/splash-icon-dark.png",
+            "backgroundColor": "#111110"
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "KHUÔN sử dụng camera để quét mã QR, VietQR và Wi-Fi QR.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      "expo-font"
+    ],
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3d3c0712-223b-4306-8c7e-798bbae7b4c4"
+      }
+    },
+    "owner": "ducthanh2306"
   }
 }

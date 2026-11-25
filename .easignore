@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+dist-web/
+dist-android/
+web-build/
+/android
+/ios
+*.tsbuildinfo
+*.log
