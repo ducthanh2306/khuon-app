@@ -1,4 +1,4 @@
-# KHUÔN — Kho Mã, Quét QR & OCR Đa Ngôn Ngữ
+<img width="865" height="397" alt="image" src="https://github.com/user-attachments/assets/3b9c1d98-2f02-477a-8b5d-c47349f50fd4" /># KHUÔN — Kho Mã, Quét QR & OCR Đa Ngôn Ngữ
 
 Ứng dụng tiện ích **offline-first** cho **Android & Web** (React Native + Expo SDK 58), tối ưu cho các thao tác nhanh hằng ngày: lưu mẫu tin nhắn kèm ảnh QR ngân hàng, quét & tạo VietQR, cắt vùng ảnh nhận diện chữ đa ngôn ngữ (OCR), và tùy biến giao diện đọc rõ nét.
 
@@ -85,6 +85,9 @@ npm install
 ---
 
 ## Build file `.apk`
+
+### Cài file apk trực tiếp ở phần release: 
+<img width="419" height="191" alt="image" src="https://github.com/user-attachments/assets/df8082a6-af3b-41d4-be2e-533efd17c573" />
 
 ### Build trực tiếp trên máy (Android Studio + SDK)
 
