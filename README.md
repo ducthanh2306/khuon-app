@@ -1,4 +1,3 @@
-# KHUÔN — Kho Mã, Quét QR & Lọc Dữ Liệu
 # KHUÔN — Kho Mã, Quét QR & OCR Đa Ngôn Ngữ
 
 Ứng dụng tiện ích **100% offline** cho **Android / Web** (React Native + Expo SDK 58), tập trung vào thao tác nhanh hằng ngày: lưu và copy nhanh đoạn mã/mẫu tin nhắn, quét & tạo mã QR (VietQR, Wi-Fi, vCard, URL), và lọc sạch văn bản thô từ PDF/OCR/Zalo.
