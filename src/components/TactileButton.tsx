@@ -8,7 +8,7 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import { FONTS, RADII, ThemePalette } from '../theme/tokens';
+import { FONTS, RADII, ThemePalette, scaleFont } from '../theme/tokens';
 import { hapticTap } from '../services/haptics';
 
 interface TactileButtonProps {
@@ -88,7 +88,8 @@ export const TactileButton = React.memo(function TactileButton({
           size === 'sm' ? styles.labelSm : styles.labelMd,
           {
             color: fg,
-            fontFamily: mono ? FONTS.monoMedium : FONTS.sansSemiBold,
+            fontFamily: mono ? FONTS.monoMedium : theme.uiFontSemiBold,
+            fontSize: scaleFont(size === 'sm' ? 11.5 : 13, theme),
           },
           textStyle,
         ]}

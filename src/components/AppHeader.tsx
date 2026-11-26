@@ -8,7 +8,8 @@ import { hapticTap } from '../services/haptics';
 const CHANNEL_TITLES: Record<TabKey, string> = {
   vault: '01 // KHO MÃ',
   qr: '02 // QUÉT QR',
-  filter: '03 // LỌC DỮ LIỆU',
+  ocr: '03 // QUÉT CHỮ',
+  settings: '04 // CÀI ĐẶT',
 };
 
 interface AppHeaderProps {

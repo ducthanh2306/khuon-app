@@ -232,10 +232,12 @@ const BULLET_LINE_RE = /^[ \t]*[•▪◦‣–—*+][ \t]+/gm;
 const LINE_START_LOWER_RE = /^([ \t]*(?:[-*]\s+|\d{1,3}[.)]\s+)?)(\p{Ll})/gmu;
 const SENTENCE_LOWER_RE = /([.!?]\s+)(\p{Ll})/gu;
 
-const PHONE_EXTRACT_RE = /(?:\+?84|0)(?:[\s.-]*\d){8,10}\b/g;
+const PHONE_EXTRACT_RE = /(?:\+\d{1,3}|0)(?:[\s.-]*\d){8,11}\b/g;
 const EMAIL_EXTRACT_RE = /[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/g;
 const URL_EXTRACT_RE = /https?:\/\/[^\s)>\]"']+/gi;
 const CODE_EXTRACT_RE = /\b(?:\d{6,19}|[A-Z]{2,6}[-_]\d{3,10})\b/g;
+const INVISIBLE_OCR_RE = /[\u200B-\u200D\uFEFF\u00AD\u2060]/g;
+const OCR_WEIRD_SPACE_RE = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 function applyModernTonePlacement(text: string): { result: string; fixes: number } {
   let fixes = 0;
@@ -666,6 +668,45 @@ export function normalizeText(raw: string, options: NormalizerOptions): Normaliz
       linesMerged,
       spacesNormalized,
     },
+    entities: extractEntities(text),
+  };
+}
+
+/**
+ * Clean multilingual OCR output (Vietnamese, English, Japanese, Korean, Chinese)
+ * while preserving original wording/casing/scripts and capping spaces to at most 1.
+ */
+export function normalizeOcrText(
+  raw: string,
+  autoClean = true
+): { text: string; entities: ExtractedEntities } {
+  if (!raw) {
+    return {
+      text: '',
+      entities: { phones: [], emails: [], urls: [], codes: [] },
+    };
+  }
+
+  let text = raw
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(INVISIBLE_OCR_RE, '')
+    .normalize('NFC');
+
+  if (autoClean) {
+    text = text
+      .replace(OCR_WEIRD_SPACE_RE, ' ')
+      .split('\n')
+      .map((line) => line.replace(/[ \t]{2,}/g, ' ').trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  } else {
+    text = text.trim();
+  }
+
+  return {
+    text,
     entities: extractEntities(text),
   };
 }

@@ -1,6 +1,38 @@
 export type ThemeMode = 'paper' | 'charcoal';
 
-export type TabKey = 'vault' | 'qr' | 'filter';
+export type TabKey = 'vault' | 'qr' | 'ocr' | 'settings';
+
+export type AccentColorId =
+  | 'vermilion'
+  | 'cobalt'
+  | 'emerald'
+  | 'amber'
+  | 'crimson'
+  | 'indigo';
+
+export type FontFamilyId = 'vietnam' | 'mono' | 'system' | 'serif';
+
+export type FontScaleId = 'small' | 'normal' | 'large' | 'xlarge';
+
+export type InkContrastId = 'default' | 'high' | 'warm';
+
+export type OcrLangMode =
+  | 'auto'
+  | 'latin'
+  | 'japanese'
+  | 'korean'
+  | 'chinese';
+
+export interface AppSettings {
+  themeMode: ThemeMode;
+  accentColor: AccentColorId;
+  fontFamily: FontFamilyId;
+  fontScale: FontScaleId;
+  inkContrast: InkContrastId;
+  hapticsEnabled: boolean;
+  autoNormalizeOcr: boolean;
+  defaultOcrLang: OcrLangMode;
+}
 
 export type NormalizerPresetId =
   | 'document'
@@ -60,6 +92,7 @@ export interface SnippetItem {
   id: string;
   title: string;
   content: string;
+  imageUri?: string;
   category: SnippetCategory;
   pinned: boolean;
   sensitive: boolean;

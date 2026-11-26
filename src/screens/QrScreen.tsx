@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Linking,
+  Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -19,33 +21,66 @@ import {
 } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import Svg from 'react-native-svg';
 import {
   BookmarkPlus,
   Camera,
   CheckCircle2,
+  ChevronDown,
   Copy,
   ExternalLink,
   Flashlight,
   Image as ImageIcon,
   RefreshCw,
   RotateCcw,
+  Search,
   Trash2,
-  Wand2,
   Wifi,
+  X,
 } from 'lucide-react-native';
-import { FONTS, RADII, ThemePalette } from '../theme/tokens';
+import { FONTS, RADII, ThemePalette, scaleFont } from '../theme/tokens';
 import { ParsedQrPayload, QrHistoryItem } from '../types/app';
 import {
+  VIETNAM_BANK_BINS,
+  buildVietQrString,
   buildWifiQrString,
   parseQrPayload,
   summarizeQrPayload,
 } from '../engines/qrParser';
+import { removeVietnameseTones } from '../engines/textTools';
 import { decodeQrFromImageUri } from '../services/qrImageDecoder';
+import { persistBase64VaultImage } from '../services/imageVault';
 import { TactileButton } from '../components/TactileButton';
 import { SvgQrCode } from '../components/SvgQrCode';
 import { hapticSuccess, hapticTap } from '../services/haptics';
 
 type QrSubMode = 'scan' | 'generate' | 'history';
+type GenModeType = 'text' | 'wifi' | 'vietqr';
+
+const POPULAR_BINS = [
+  '970436', // VCB
+  '970422', // MB
+  '970407', // TCB
+  '970418', // BIDV
+  '970415', // VTB
+  '970416', // ACB
+  '970423', // TPB
+  '970432', // VPB
+];
+
+const BANK_LIST = Object.entries(VIETNAM_BANK_BINS).map(([bin, info]) => ({
+  bin,
+  short: info.short,
+  name: info.name,
+  searchKey: removeVietnameseTones(`${bin} ${info.short} ${info.name}`).toLowerCase(),
+}));
+
+const ZOOM_PRESETS: Array<{ label: string; value: number }> = [
+  { label: '1.0×', value: 0 },
+  { label: '1.5×', value: 0.17 },
+  { label: '2.0×', value: 0.34 },
+  { label: '3.0×', value: 0.67 },
+];
 
 interface QrScreenProps {
   theme: ThemePalette;
@@ -55,8 +90,11 @@ interface QrScreenProps {
   initialGenText?: string;
   onConsumeInitialGenText?: () => void;
   onNotify: (msg: string) => void;
-  onSaveToVault: (title: string, content: string) => void;
-  onSendToFilter: (text: string) => void;
+  onSaveToVault: (title: string, content: string, imageUri?: string) => void;
+}
+
+function clampZoom(z: number): number {
+  return Math.max(0, Math.min(1, Math.round(z * 100) / 100));
 }
 
 export const QrScreen = React.memo(function QrScreen({
@@ -68,7 +106,6 @@ export const QrScreen = React.memo(function QrScreen({
   onConsumeInitialGenText,
   onNotify,
   onSaveToVault,
-  onSendToFilter,
 }: QrScreenProps) {
   const { height: windowHeight } = useWindowDimensions();
   const viewfinderHeight = Math.round(
@@ -78,19 +115,68 @@ export const QrScreen = React.memo(function QrScreen({
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>('back');
   const [torch, setTorch] = useState(false);
+  const [cameraZoom, setCameraZoom] = useState(0);
   const [scannerPaused, setScannerPaused] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<ParsedQrPayload | null>(null);
   const [manualQrInput, setManualQrInput] = useState('');
 
   // QR Generator state
-  const [genType, setGenType] = useState<'text' | 'wifi'>('text');
+  const [genType, setGenType] = useState<GenModeType>('vietqr');
   const [genText, setGenText] = useState('');
   const [wifiSsid, setWifiSsid] = useState('');
   const [wifiPass, setWifiPass] = useState('');
   const [wifiSec, setWifiSec] = useState<'WPA' | 'nopass'>('WPA');
 
+  // VietQR Generator state
+  const [selectedBankBin, setSelectedBankBin] = useState('970422'); // MB Bank default
+  const [bankPickerOpen, setBankPickerOpen] = useState(false);
+  const [bankSearch, setBankSearch] = useState('');
+  const [vietAccount, setVietAccount] = useState('');
+  const [vietAmount, setVietAmount] = useState('');
+  const [vietPurpose, setVietPurpose] = useState('');
+  const [savingQrToVault, setSavingQrToVault] = useState(false);
+
+  const qrSvgRef = useRef<Svg | null>(null);
   const lastScanRef = useRef<{ data: string; at: number }>({ data: '', at: 0 });
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef(0);
+  const cameraZoomRef = useRef(0);
+  cameraZoomRef.current = cameraZoom;
+
+  const pinchResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 2,
+      onMoveShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 2,
+      onPanResponderGrant: (evt) => {
+        const t = evt.nativeEvent.touches;
+        if (t.length === 2) {
+          pinchStartDistRef.current = Math.hypot(
+            t[0].pageX - t[1].pageX,
+            t[0].pageY - t[1].pageY
+          );
+          pinchStartZoomRef.current = cameraZoomRef.current;
+        }
+      },
+      onPanResponderMove: (evt) => {
+        const t = evt.nativeEvent.touches;
+        if (t.length === 2 && pinchStartDistRef.current) {
+          const dist = Math.hypot(
+            t[0].pageX - t[1].pageX,
+            t[0].pageY - t[1].pageY
+          );
+          const delta = (dist - pinchStartDistRef.current) / 360;
+          setCameraZoom(clampZoom(pinchStartZoomRef.current + delta));
+        }
+      },
+      onPanResponderRelease: () => {
+        pinchStartDistRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        pinchStartDistRef.current = null;
+      },
+    })
+  ).current;
 
   useEffect(() => {
     if (initialGenText) {
@@ -164,12 +250,99 @@ export const QrScreen = React.memo(function QrScreen({
     [onNotify]
   );
 
-  const genPayload =
-    genType === 'text'
-      ? genText
-      : wifiSsid.trim()
+  const selectedBankInfo = VIETNAM_BANK_BINS[selectedBankBin] ?? {
+    short: 'BANK',
+    name: `BIN ${selectedBankBin}`,
+  };
+
+  const filteredBanks = useMemo(() => {
+    const q = removeVietnameseTones(bankSearch.trim()).toLowerCase();
+    if (!q) return BANK_LIST;
+    return BANK_LIST.filter((b) => b.searchKey.includes(q));
+  }, [bankSearch]);
+
+  const genPayload = useMemo(() => {
+    if (genType === 'text') return genText;
+    if (genType === 'wifi') {
+      return wifiSsid.trim()
         ? buildWifiQrString(wifiSsid.trim(), wifiPass, wifiSec)
         : '';
+    }
+    return buildVietQrString({
+      bankBin: selectedBankBin,
+      accountNumber: vietAccount,
+      amount: vietAmount,
+      purpose: vietPurpose,
+    });
+  }, [
+    genType,
+    genText,
+    wifiSsid,
+    wifiPass,
+    wifiSec,
+    selectedBankBin,
+    vietAccount,
+    vietAmount,
+    vietPurpose,
+  ]);
+
+  const handleSaveGeneratedToVault = async () => {
+    if (!genPayload.trim()) return;
+    setSavingQrToVault(true);
+    try {
+      let storedImgUri: string | undefined;
+      const svgNode = qrSvgRef.current as {
+        toDataURL?: (cb: (b64: string) => void) => void;
+      } | null;
+
+      if (svgNode && typeof svgNode.toDataURL === 'function') {
+        const base64 = await new Promise<string | null>((resolve) => {
+          let done = false;
+          const t = setTimeout(() => {
+            if (!done) {
+              done = true;
+              resolve(null);
+            }
+          }, 1200);
+          try {
+            svgNode.toDataURL?.((data) => {
+              if (!done) {
+                done = true;
+                clearTimeout(t);
+                resolve(data || null);
+              }
+            });
+          } catch {
+            clearTimeout(t);
+            resolve(null);
+          }
+        });
+        if (base64) {
+          storedImgUri = await persistBase64VaultImage(base64);
+        }
+      }
+
+      let title = 'Mã QR';
+      let body = genPayload;
+      if (genType === 'vietqr') {
+        const amt = vietAmount.replace(/[^\d]/g, '');
+        title = `VietQR ${selectedBankInfo.short} · ${vietAccount.trim()}`;
+        body = `${selectedBankInfo.name} · STK: ${vietAccount.trim()}${
+          amt ? ` · ${Number(amt).toLocaleString('vi-VN')}đ` : ''
+        }${vietPurpose.trim() ? ` · ${vietPurpose.trim()}` : ''}`;
+      } else if (genType === 'wifi') {
+        title = `QR Wi-Fi: ${wifiSsid.trim()}`;
+        body = wifiPass || '(Không mật khẩu)';
+      } else {
+        title = `QR: ${genText.trim().slice(0, 32)}`;
+      }
+
+      onSaveToVault(title, body, storedImgUri);
+      hapticSuccess();
+    } finally {
+      setSavingQrToVault(false);
+    }
+  };
 
   const formatTime = (ts: number) => {
     const d = new Date(ts);
@@ -179,6 +352,8 @@ export const QrScreen = React.memo(function QrScreen({
     const mo = String(d.getMonth() + 1).padStart(2, '0');
     return `${hh}:${mm} · ${dd}/${mo}`;
   };
+
+  const zoomFactorLabel = `${(1 + cameraZoom * 3).toFixed(1)}×`;
 
   const renderParsedCard = (payload: ParsedQrPayload) => {
     const kindLabels: Record<ParsedQrPayload['kind'], string> = {
@@ -457,16 +632,10 @@ export const QrScreen = React.memo(function QrScreen({
                   style={{ flex: 1 }}
                 />
                 <TactileButton
-                  label="LỌC DỮ LIỆU →"
-                  theme={theme}
-                  mono
-                  icon={<Wand2 size={14} color={theme.ink} />}
-                  onPress={() => onSendToFilter(payload.text)}
-                />
-                <TactileButton
                   label="+ KHO MÃ"
                   theme={theme}
                   mono
+                  icon={<BookmarkPlus size={14} color={theme.ink} />}
                   onPress={() =>
                     onSaveToVault(
                       payload.text.slice(0, 36),
@@ -563,7 +732,16 @@ export const QrScreen = React.memo(function QrScreen({
                 { backgroundColor: theme.surface, borderColor: theme.border },
               ]}
             >
-              <Text style={[styles.emptyHistoryText, { color: theme.inkMuted }]}>
+              <Text
+                style={[
+                  styles.emptyHistoryText,
+                  {
+                    color: theme.inkMuted,
+                    fontFamily: theme.uiFontRegular,
+                    fontSize: scaleFont(13, theme),
+                  },
+                ]}
+              >
                 Chưa có mã QR nào được quét. Các mã VietQR, Wi-Fi, URL đã quét sẽ tự động lưu tại đây (offline).
               </Text>
             </View>
@@ -597,7 +775,14 @@ export const QrScreen = React.memo(function QrScreen({
                 </View>
                 <Text
                   numberOfLines={1}
-                  style={[styles.histSummary, { color: theme.ink }]}
+                  style={[
+                    styles.histSummary,
+                    {
+                      color: theme.ink,
+                      fontFamily: theme.uiFontMedium,
+                      fontSize: scaleFont(13, theme),
+                    },
+                  ]}
                 >
                   {h.summary}
                 </Text>
@@ -628,8 +813,8 @@ export const QrScreen = React.memo(function QrScreen({
           keyboardShouldPersistTaps="handled"
         >
           {subMode === 'scan' ? (
-            <View style={{ gap: 12 }}>
-              {/* Camera Viewfinder (expanded inline inside tab) */}
+            <View style={{ gap: 10 }}>
+              {/* Expanded Inline Camera Viewfinder with Pinch & Step Zoom */}
               <View
                 style={[
                   styles.viewfinderBox,
@@ -654,7 +839,7 @@ export const QrScreen = React.memo(function QrScreen({
                   </View>
                 ) : !permission.granted ? (
                   <View style={styles.camFallback}>
-                    <Camera size={28} color="#FF5A26" strokeWidth={1.6} />
+                    <Camera size={28} color={theme.accent} strokeWidth={1.6} />
                     <Text style={[styles.camFallbackTitle, { color: '#F2F0EA' }]}>
                       Cần quyền Camera để quét QR trực tiếp
                     </Text>
@@ -671,7 +856,7 @@ export const QrScreen = React.memo(function QrScreen({
                   </View>
                 ) : cameraError ? (
                   <View style={styles.camFallback}>
-                    <Camera size={26} color="#FF5A26" strokeWidth={1.6} />
+                    <Camera size={26} color={theme.accent} strokeWidth={1.6} />
                     <Text style={[styles.camFallbackTitle, { color: '#F2F0EA' }]}>
                       Không mở được camera trên thiết bị này
                     </Text>
@@ -680,11 +865,12 @@ export const QrScreen = React.memo(function QrScreen({
                     </Text>
                   </View>
                 ) : (
-                  <View style={styles.camWrap}>
+                  <View style={styles.camWrap} {...pinchResponder.panHandlers}>
                     <CameraView
                       style={StyleSheet.absoluteFill}
                       facing={facing}
                       enableTorch={torch}
+                      zoom={cameraZoom}
                       barcodeScannerSettings={{
                         barcodeTypes: ['qr', 'ean13', 'code128', 'datamatrix'],
                       }}
@@ -696,7 +882,7 @@ export const QrScreen = React.memo(function QrScreen({
                       }
                     />
 
-                    {/* Leica / Teenage Engineering Reticle Overlay */}
+                    {/* Reticle & Zoom Badge Overlay */}
                     <View pointerEvents="none" style={styles.reticleOverlay}>
                       <View style={styles.reticleFrame}>
                         <View style={[styles.corner, styles.cTL, { borderColor: theme.accent }]} />
@@ -706,12 +892,79 @@ export const QrScreen = React.memo(function QrScreen({
                       </View>
                       <View style={styles.camStatusPill}>
                         <Text style={styles.camStatusText}>
-                          {scannerPaused ? 'ĐÃ BẮT MÃ // TẠM DỪNG' : 'SẴN SÀNG // ĐƯA MÃ VÀO KHUNG'}
+                          {scannerPaused
+                            ? 'ĐÃ BẮT MÃ // TẠM DỪNG'
+                            : `ZOOM ${zoomFactorLabel} // ĐƯA MÃ VÀO KHUNG`}
                         </Text>
                       </View>
                     </View>
                   </View>
                 )}
+              </View>
+
+              {/* Tactile Zoom Strip (works cleanly on mobile camera) */}
+              <View
+                style={[
+                  styles.zoomBar,
+                  { backgroundColor: theme.surface, borderColor: theme.border },
+                ]}
+              >
+                <Pressable
+                  onPress={() => {
+                    hapticTap('light');
+                    setCameraZoom((z) => clampZoom(z - 0.1));
+                  }}
+                  style={[
+                    styles.zoomStepBtn,
+                    { borderColor: theme.border, backgroundColor: theme.well },
+                  ]}
+                >
+                  <Text style={[styles.zoomStepText, { color: theme.ink }]}>−</Text>
+                </Pressable>
+
+                <View style={styles.zoomPresetsWrap}>
+                  {ZOOM_PRESETS.map((zp) => {
+                    const active = Math.abs(cameraZoom - zp.value) < 0.06;
+                    return (
+                      <Pressable
+                        key={zp.label}
+                        onPress={() => {
+                          hapticTap('light');
+                          setCameraZoom(zp.value);
+                        }}
+                        style={[
+                          styles.zoomPresetPill,
+                          {
+                            borderColor: active ? theme.accent : theme.border,
+                            backgroundColor: active ? theme.accentSoft : 'transparent',
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.zoomPresetText,
+                            { color: active ? theme.accent : theme.inkSecondary },
+                          ]}
+                        >
+                          {zp.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                <Pressable
+                  onPress={() => {
+                    hapticTap('light');
+                    setCameraZoom((z) => clampZoom(z + 0.1));
+                  }}
+                  style={[
+                    styles.zoomStepBtn,
+                    { borderColor: theme.border, backgroundColor: theme.well },
+                  ]}
+                >
+                  <Text style={[styles.zoomStepText, { color: theme.ink }]}>+</Text>
+                </Pressable>
               </View>
 
               {/* Camera Hardware Controls */}
@@ -790,7 +1043,16 @@ export const QrScreen = React.memo(function QrScreen({
             <View style={{ gap: 12 }}>
               <View style={styles.rowBtns}>
                 <TactileButton
-                  label="VĂN BẢN / LINK"
+                  label="VIETQR"
+                  theme={theme}
+                  variant={genType === 'vietqr' ? 'primary' : 'secondary'}
+                  mono
+                  size="sm"
+                  onPress={() => setGenType('vietqr')}
+                  style={{ flex: 1 }}
+                />
+                <TactileButton
+                  label="VĂN BẢN"
                   theme={theme}
                   variant={genType === 'text' ? 'primary' : 'secondary'}
                   mono
@@ -799,7 +1061,7 @@ export const QrScreen = React.memo(function QrScreen({
                   style={{ flex: 1 }}
                 />
                 <TactileButton
-                  label="MÃ WI-FI"
+                  label="WI-FI"
                   theme={theme}
                   variant={genType === 'wifi' ? 'primary' : 'secondary'}
                   mono
@@ -815,6 +1077,152 @@ export const QrScreen = React.memo(function QrScreen({
                 />
               </View>
 
+              {genType === 'vietqr' ? (
+                <View
+                  style={[
+                    styles.genInputWrap,
+                    { backgroundColor: theme.surface, borderColor: theme.border, gap: 10 },
+                  ]}
+                >
+                  <View>
+                    <Text style={[styles.inputCaption, { color: theme.inkMuted }]}>
+                      NGÂN HÀNG
+                    </Text>
+                    <Pressable
+                      onPress={() => setBankPickerOpen(true)}
+                      style={[
+                        styles.bankSelectBtn,
+                        { backgroundColor: theme.well, borderColor: theme.border },
+                      ]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.bankSelectMain,
+                            { color: theme.ink, fontFamily: theme.uiFontSemiBold },
+                          ]}
+                        >
+                          {selectedBankInfo.short} — {selectedBankInfo.name}
+                        </Text>
+                        <Text style={[styles.bankBinSub, { color: theme.inkMuted }]}>
+                          BIN {selectedBankBin}
+                        </Text>
+                      </View>
+                      <ChevronDown size={16} color={theme.inkSecondary} />
+                    </Pressable>
+                  </View>
+
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.quickBankRail}
+                  >
+                    {POPULAR_BINS.map((bin) => {
+                      const info = VIETNAM_BANK_BINS[bin];
+                      const active = selectedBankBin === bin;
+                      return (
+                        <Pressable
+                          key={bin}
+                          onPress={() => {
+                            hapticTap('light');
+                            setSelectedBankBin(bin);
+                          }}
+                          style={[
+                            styles.quickBankChip,
+                            {
+                              borderColor: active ? theme.accent : theme.border,
+                              backgroundColor: active ? theme.accentSoft : theme.well,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.quickBankText,
+                              { color: active ? theme.accent : theme.inkSecondary },
+                            ]}
+                          >
+                            {info?.short ?? bin}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+
+                  <View>
+                    <Text style={[styles.inputCaption, { color: theme.inkMuted }]}>
+                      SỐ TÀI KHOẢN (STK) *
+                    </Text>
+                    <TextInput
+                      value={vietAccount}
+                      onChangeText={setVietAccount}
+                      placeholder="Nhập số tài khoản nhận tiền..."
+                      placeholderTextColor={theme.inkMuted}
+                      keyboardType="default"
+                      autoCapitalize="characters"
+                      style={[
+                        styles.wifiInput,
+                        {
+                          backgroundColor: theme.well,
+                          borderColor: theme.border,
+                          color: theme.ink,
+                          fontFamily: FONTS.monoMedium,
+                        },
+                      ]}
+                    />
+                  </View>
+
+                  <View>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.inputCaption, { color: theme.inkMuted }]}>
+                        SỐ TIỀN VNĐ (CÓ THỂ ĐỂ TRỐNG)
+                      </Text>
+                      {vietAmount.replace(/[^\d]/g, '') ? (
+                        <Text style={[styles.amountPreview, { color: theme.accent }]}>
+                          {Number(vietAmount.replace(/[^\d]/g, '')).toLocaleString('vi-VN')} đ
+                        </Text>
+                      ) : null}
+                    </View>
+                    <TextInput
+                      value={vietAmount}
+                      onChangeText={(t) => setVietAmount(t.replace(/[^\d]/g, ''))}
+                      placeholder="Để trống nếu khách tự nhập số tiền..."
+                      placeholderTextColor={theme.inkMuted}
+                      keyboardType="numeric"
+                      style={[
+                        styles.wifiInput,
+                        {
+                          backgroundColor: theme.well,
+                          borderColor: theme.border,
+                          color: theme.ink,
+                          fontFamily: FONTS.monoRegular,
+                        },
+                      ]}
+                    />
+                  </View>
+
+                  <View>
+                    <Text style={[styles.inputCaption, { color: theme.inkMuted }]}>
+                      NỘI DUNG CHUYỂN KHOẢN (CÓ THỂ ĐỂ TRỐNG)
+                    </Text>
+                    <TextInput
+                      value={vietPurpose}
+                      onChangeText={setVietPurpose}
+                      placeholder="VD: Thanh toan don hang, Ship COD..."
+                      placeholderTextColor={theme.inkMuted}
+                      style={[
+                        styles.wifiInput,
+                        {
+                          backgroundColor: theme.well,
+                          borderColor: theme.border,
+                          color: theme.ink,
+                          fontFamily: theme.uiFontRegular,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+              ) : null}
+
               {genType === 'text' ? (
                 <View
                   style={[
@@ -829,7 +1237,10 @@ export const QrScreen = React.memo(function QrScreen({
                     placeholder="Nhập đường link, số tài khoản, đoạn text cần tạo QR..."
                     placeholderTextColor={theme.inkMuted}
                     textAlignVertical="top"
-                    style={[styles.genTextArea, { color: theme.ink }]}
+                    style={[
+                      styles.genTextArea,
+                      { color: theme.ink, fontFamily: theme.uiFontRegular },
+                    ]}
                   />
                   <View style={styles.genActions}>
                     <TactileButton
@@ -854,7 +1265,9 @@ export const QrScreen = React.memo(function QrScreen({
                     ) : null}
                   </View>
                 </View>
-              ) : (
+              ) : null}
+
+              {genType === 'wifi' ? (
                 <View
                   style={[
                     styles.genInputWrap,
@@ -872,6 +1285,7 @@ export const QrScreen = React.memo(function QrScreen({
                         backgroundColor: theme.well,
                         borderColor: theme.border,
                         color: theme.ink,
+                        fontFamily: theme.uiFontRegular,
                       },
                     ]}
                   />
@@ -886,6 +1300,7 @@ export const QrScreen = React.memo(function QrScreen({
                         backgroundColor: theme.well,
                         borderColor: theme.border,
                         color: theme.ink,
+                        fontFamily: theme.uiFontRegular,
                       },
                     ]}
                   />
@@ -910,25 +1325,156 @@ export const QrScreen = React.memo(function QrScreen({
                     />
                   </View>
                 </View>
-              )}
+              ) : null}
 
               <View style={styles.qrPreviewArea}>
-                <SvgQrCode value={genPayload} size={216} theme={theme} />
+                <SvgQrCode
+                  value={genPayload}
+                  size={216}
+                  theme={theme}
+                  svgRef={qrSvgRef}
+                />
                 {genPayload.trim() ? (
-                  <TactileButton
-                    label="COPY CHUỖI MÃ QR"
-                    theme={theme}
-                    mono
-                    size="sm"
-                    icon={<Copy size={13} color={theme.ink} />}
-                    onPress={() => copyField(genPayload, 'chuỗi QR')}
-                  />
+                  <View style={styles.rowBtns}>
+                    <TactileButton
+                      label={savingQrToVault ? 'ĐANG LƯU...' : '+ LƯU KHO MÃ'}
+                      theme={theme}
+                      variant="primary"
+                      mono
+                      size="sm"
+                      disabled={savingQrToVault}
+                      icon={<BookmarkPlus size={13} color={theme.accentInk} />}
+                      onPress={handleSaveGeneratedToVault}
+                    />
+                    <TactileButton
+                      label="COPY CHUỖI QR"
+                      theme={theme}
+                      mono
+                      size="sm"
+                      icon={<Copy size={13} color={theme.ink} />}
+                      onPress={() => copyField(genPayload, 'chuỗi QR')}
+                    />
+                  </View>
                 ) : null}
               </View>
             </View>
           ) : null}
         </ScrollView>
       )}
+
+      {/* Searchable Bank Picker Modal */}
+      <Modal
+        visible={bankPickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setBankPickerOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalSheet,
+              { backgroundColor: theme.surface, borderColor: theme.border },
+            ]}
+          >
+            <View
+              style={[styles.modalHeader, { borderBottomColor: theme.border }]}
+            >
+              <Text style={[styles.modalTitle, { color: theme.ink }]}>
+                CHỌN NGÂN HÀNG VIETQR
+              </Text>
+              <Pressable onPress={() => setBankPickerOpen(false)} hitSlop={8}>
+                <X size={18} color={theme.ink} />
+              </Pressable>
+            </View>
+
+            <View
+              style={[
+                styles.bankSearchWrap,
+                { borderBottomColor: theme.border },
+              ]}
+            >
+              <View
+                style={[
+                  styles.bankSearchBox,
+                  { backgroundColor: theme.well, borderColor: theme.border },
+                ]}
+              >
+                <Search size={14} color={theme.inkMuted} />
+                <TextInput
+                  value={bankSearch}
+                  onChangeText={setBankSearch}
+                  placeholder="Tìm tên ngân hàng (VCB, MB, Techcombank...)"
+                  placeholderTextColor={theme.inkMuted}
+                  style={[
+                    styles.bankSearchInput,
+                    { color: theme.ink, fontFamily: theme.uiFontRegular },
+                  ]}
+                />
+                {bankSearch ? (
+                  <Pressable onPress={() => setBankSearch('')}>
+                    <X size={14} color={theme.inkMuted} />
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+            <FlatList
+              data={filteredBanks}
+              keyExtractor={(b) => b.bin}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item: bank }) => {
+                const active = bank.bin === selectedBankBin;
+                return (
+                  <Pressable
+                    onPress={() => {
+                      hapticTap('light');
+                      setSelectedBankBin(bank.bin);
+                      setBankPickerOpen(false);
+                      setBankSearch('');
+                    }}
+                    style={({ pressed }) => [
+                      styles.bankOptionRow,
+                      {
+                        borderBottomColor: theme.border,
+                        backgroundColor: active
+                          ? theme.accentSoft
+                          : pressed
+                            ? theme.well
+                            : 'transparent',
+                      },
+                    ]}
+                  >
+                    <View style={styles.bankOptionLeft}>
+                      <Text
+                        style={[
+                          styles.bankShortTag,
+                          {
+                            color: active ? theme.accent : theme.ink,
+                            borderColor: active ? theme.accent : theme.border,
+                          },
+                        ]}
+                      >
+                        {bank.short}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.bankNameText,
+                          { color: theme.ink, fontFamily: theme.uiFontMedium },
+                        ]}
+                      >
+                        {bank.name}
+                      </Text>
+                    </View>
+                    <Text style={[styles.bankBinSub, { color: theme.inkMuted }]}>
+                      {bank.bin}
+                    </Text>
+                  </Pressable>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 });
@@ -974,9 +1520,7 @@ const styles = StyleSheet.create({
     height: 360,
     overflow: 'hidden',
   },
-  camWrap: {
-    flex: 1,
-  },
+  camWrap: { flex: 1 },
   reticleOverlay: {
     position: 'absolute',
     top: 0,
@@ -1014,6 +1558,46 @@ const styles = StyleSheet.create({
     color: '#F2F0EA',
     letterSpacing: 0.8,
   },
+  zoomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 8,
+  },
+  zoomStepBtn: {
+    width: 32,
+    height: 28,
+    borderWidth: 1,
+    borderRadius: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomStepText: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  zoomPresetsWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  zoomPresetPill: {
+    borderWidth: 1,
+    borderRadius: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  zoomPresetText: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 10.5,
+    fontVariant: ['tabular-nums'],
+  },
   camFallback: {
     flex: 1,
     alignItems: 'center',
@@ -1039,6 +1623,11 @@ const styles = StyleSheet.create({
   rowBtns: {
     flexDirection: 'row',
     gap: 8,
+  },
+  rowBetween: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   resultCard: {
     borderWidth: 1,
@@ -1068,12 +1657,8 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     letterSpacing: 0.7,
   },
-  resultBody: {
-    padding: 12,
-  },
-  kvRow: {
-    gap: 3,
-  },
+  resultBody: { padding: 12 },
+  kvRow: { gap: 3 },
   kvKey: {
     fontFamily: FONTS.monoMedium,
     fontSize: 9.5,
@@ -1142,8 +1727,51 @@ const styles = StyleSheet.create({
     borderRadius: RADII.xs,
     padding: 11,
   },
+  inputCaption: {
+    fontFamily: FONTS.monoMedium,
+    fontSize: 9.5,
+    letterSpacing: 0.7,
+    marginBottom: 5,
+  },
+  amountPreview: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 10.5,
+    marginBottom: 5,
+    fontVariant: ['tabular-nums'],
+  },
+  bankSelectBtn: {
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  bankSelectMain: {
+    fontSize: 13.5,
+  },
+  bankBinSub: {
+    fontFamily: FONTS.monoRegular,
+    fontSize: 10.5,
+    marginTop: 2,
+  },
+  quickBankRail: {
+    gap: 6,
+  },
+  quickBankChip: {
+    borderWidth: 1,
+    borderRadius: 2,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  quickBankText: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 10.5,
+    letterSpacing: 0.5,
+  },
   genTextArea: {
-    fontFamily: FONTS.sansRegular,
     fontSize: 13.5,
     minHeight: 86,
     lineHeight: 20,
@@ -1158,7 +1786,6 @@ const styles = StyleSheet.create({
     borderRadius: RADII.xs,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    fontFamily: FONTS.sansRegular,
     fontSize: 13.5,
   },
   qrPreviewArea: {
@@ -1172,8 +1799,6 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   emptyHistoryText: {
-    fontFamily: FONTS.sansRegular,
-    fontSize: 13,
     lineHeight: 20,
   },
   histTopRow: {
@@ -1186,10 +1811,6 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.monoBold,
     fontSize: 10,
     letterSpacing: 0.7,
-  },
-  histList: {
-    borderWidth: 1,
-    borderRadius: RADII.xs,
   },
   histRow: {
     flexDirection: 'row',
@@ -1212,8 +1833,76 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.monoRegular,
     fontSize: 10,
   },
-  histSummary: {
-    fontFamily: FONTS.sansMedium,
+  histSummary: {},
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17,17,16,0.55)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    maxHeight: '82%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+  },
+  modalTitle: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 12,
+    letterSpacing: 0.9,
+  },
+  bankSearchWrap: {
+    padding: 12,
+    borderBottomWidth: 1,
+  },
+  bankSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    paddingHorizontal: 10,
+    height: 38,
+    gap: 8,
+  },
+  bankSearchInput: {
+    flex: 1,
     fontSize: 13,
+    paddingVertical: 0,
+  },
+  bankOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  bankOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    paddingRight: 8,
+  },
+  bankShortTag: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 10,
+    borderWidth: 1,
+    borderRadius: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 54,
+    textAlign: 'center',
+  },
+  bankNameText: {
+    fontSize: 13.5,
+    flex: 1,
   },
 });

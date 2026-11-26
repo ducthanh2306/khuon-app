@@ -14,7 +14,8 @@ interface ChannelItem {
 const CHANNELS: ChannelItem[] = [
   { key: 'vault', code: '01', label: 'KHO MÃ' },
   { key: 'qr', code: '02', label: 'QUÉT QR' },
-  { key: 'filter', code: '03', label: 'LỌC DỮ LIỆU' },
+  { key: 'ocr', code: '03', label: 'QUÉT CHỮ' },
+  { key: 'settings', code: '04', label: 'CÀI ĐẶT' },
 ];
 
 interface ChannelBarProps {
@@ -86,7 +87,7 @@ export const ChannelBar = React.memo(function ChannelBar({
                 styles.label,
                 {
                   color: isActive ? theme.ink : theme.inkSecondary,
-                  fontFamily: isActive ? FONTS.sansBold : FONTS.sansMedium,
+                  fontFamily: isActive ? theme.uiFontBold : theme.uiFontMedium,
                 },
               ]}
             >

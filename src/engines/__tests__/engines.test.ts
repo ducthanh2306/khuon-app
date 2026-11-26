@@ -4,10 +4,13 @@ import {
   DEFAULT_NORMALIZER_OPTIONS,
   NORMALIZER_PRESETS,
   extractEntities,
+  normalizeOcrText,
   normalizeText,
 } from '../textNormalizer';
 import {
+  buildVietQrString,
   buildWifiQrString,
+  computeCrc16Ccitt,
   parseQrPayload,
   summarizeQrPayload,
 } from '../qrParser';
@@ -227,5 +230,44 @@ describe('Document Readers & Text Tools', () => {
       { type: 'same', text: 'tail1' },
       { type: 'same', text: 'tail2' },
     ]);
+  });
+
+  it('builds valid EMVCo VietQR with CRC-16 and round-trips through parseQrPayload', () => {
+    expect(computeCrc16Ccitt('123456789')).toBe('29B1');
+
+    const qr = buildVietQrString({
+      bankBin: '970422',
+      accountNumber: '090123456789',
+      amount: '150000',
+      purpose: 'Thanh toán đơn hàng',
+    });
+    expect(qr.startsWith('000201010212')).toBe(true);
+    expect(qr.slice(-4)).toBe(computeCrc16Ccitt(qr.slice(0, -4)));
+
+    const parsed = parseQrPayload(qr);
+    expect(parsed.kind).toBe('vietqr');
+    if (parsed.kind === 'vietqr') {
+      expect(parsed.bankShortName).toBe('MB');
+      expect(parsed.accountNumber).toBe('090123456789');
+      expect(parsed.amount).toBe('150000');
+      expect(parsed.purpose).toBe('Thanh toan don hang');
+    }
+
+    const staticQr = buildVietQrString({
+      bankBin: '970436',
+      accountNumber: '1122334455',
+    });
+    expect(staticQr.startsWith('000201010211')).toBe(true);
+  });
+
+  it('normalizes multilingual OCR text while collapsing multiple spaces and extracting contacts', () => {
+    const raw =
+      'Xin   chào\u200B  Khách\t\tHàng\n日本語  テスト · 한국어   테스트 · 中文  测试\nSĐT:   0912.345.678  |   email:  shipper@khuon.vn';
+    const res = normalizeOcrText(raw, true);
+    expect(res.text).toBe(
+      'Xin chào Khách Hàng\n日本語 テスト · 한국어 테스트 · 中文 测试\nSĐT: 0912.345.678 | email: shipper@khuon.vn'
+    );
+    expect(res.entities.phones).toContain('0912345678');
+    expect(res.entities.emails).toEqual(['shipper@khuon.vn']);
   });
 });

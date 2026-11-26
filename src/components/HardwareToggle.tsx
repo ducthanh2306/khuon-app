@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { FONTS, RADII, ThemePalette } from '../theme/tokens';
+import { RADII, ThemePalette, scaleFont } from '../theme/tokens';
 import { hapticTap } from '../services/haptics';
 
 interface HardwareToggleProps {
@@ -33,9 +33,31 @@ export const HardwareToggle = React.memo(function HardwareToggle({
       ]}
     >
       <View style={styles.textCol}>
-        <Text style={[styles.label, { color: theme.ink }]}>{label}</Text>
+        <Text
+          style={[
+            styles.label,
+            {
+              color: theme.ink,
+              fontFamily: theme.uiFontMedium,
+              fontSize: scaleFont(13.5, theme),
+            },
+          ]}
+        >
+          {label}
+        </Text>
         {description ? (
-          <Text style={[styles.desc, { color: theme.inkMuted }]}>{description}</Text>
+          <Text
+            style={[
+              styles.desc,
+              {
+                color: theme.inkMuted,
+                fontFamily: theme.uiFontRegular,
+                fontSize: scaleFont(11.5, theme),
+              },
+            ]}
+          >
+            {description}
+          </Text>
         ) : null}
       </View>
 
@@ -76,11 +98,9 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   label: {
-    fontFamily: FONTS.sansMedium,
     fontSize: 13.5,
   },
   desc: {
-    fontFamily: FONTS.sansRegular,
     fontSize: 11.5,
     marginTop: 2,
   },

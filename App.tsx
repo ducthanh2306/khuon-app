@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Appearance,
@@ -24,28 +24,32 @@ import { BeVietnamPro_700Bold } from '@expo-google-fonts/be-vietnam-pro/700Bold'
 import { JetBrainsMono_400Regular } from '@expo-google-fonts/jetbrains-mono/400Regular';
 import { JetBrainsMono_500Medium } from '@expo-google-fonts/jetbrains-mono/500Medium';
 import { JetBrainsMono_700Bold } from '@expo-google-fonts/jetbrains-mono/700Bold';
-import { FONTS, RADII, THEMES } from './src/theme/tokens';
 import {
-  NormalizerOptions,
+  FONTS,
+  RADII,
+  createDefaultSettings,
+  resolveTheme,
+} from './src/theme/tokens';
+import {
+  AppSettings,
   QrHistoryItem,
   SnippetItem,
   TabKey,
   ThemeMode,
 } from './src/types/app';
-import { DEFAULT_NORMALIZER_OPTIONS } from './src/engines/textNormalizer';
 import {
   hydrateAppState,
-  saveDraftInput,
-  saveNormalizerOptions,
+  saveAppSettings,
   saveQrHistory,
   saveSnippets,
-  saveThemeMode,
 } from './src/services/storage';
+import { setHapticsEnabled } from './src/services/haptics';
 import { AppHeader } from './src/components/AppHeader';
 import { ChannelBar } from './src/components/ChannelBar';
 import { VaultScreen } from './src/screens/VaultScreen';
 import { QrScreen } from './src/screens/QrScreen';
-import { FilterScreen } from './src/screens/FilterScreen';
+import { OcrScreen } from './src/screens/OcrScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -55,7 +59,7 @@ if (Platform.OS !== 'web') {
       fade: true,
     });
   } catch {
-    // Ignore on platforms/environments where setOptions is unsupported
+    // Ignore where unsupported
   }
 }
 
@@ -72,12 +76,10 @@ function AppShell() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('vault');
   const [hydrated, setHydrated] = useState(false);
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
-    Appearance.getColorScheme() === 'dark' ? 'charcoal' : 'paper'
-  );
-  const [rawText, setRawText] = useState('');
-  const [normOptions, setNormOptions] = useState<NormalizerOptions>(
-    DEFAULT_NORMALIZER_OPTIONS
+  const [settings, setSettings] = useState<AppSettings>(() =>
+    createDefaultSettings(
+      Appearance.getColorScheme() === 'dark' ? 'charcoal' : 'paper'
+    )
   );
   const [snippets, setSnippets] = useState<SnippetItem[]>([]);
   const [qrHistory, setQrHistory] = useState<QrHistoryItem[]>([]);
@@ -87,7 +89,6 @@ function AppShell() {
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splashHiddenRef = useRef(false);
 
   // GPU-driven entrance & tab-switch animations
@@ -100,34 +101,32 @@ function AppShell() {
     let mounted = true;
     hydrateAppState().then((data) => {
       if (!mounted) return;
-      setThemeMode(data.themeMode);
+      setSettings(data.settings);
+      setHapticsEnabled(data.settings.hapticsEnabled);
       setSnippets(data.snippets);
       setQrHistory(data.qrHistory);
-      setNormOptions(data.normOptions);
-      setRawText(data.draftInput);
       setHydrated(true);
     });
     return () => {
       mounted = false;
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     };
   }, []);
 
   const isAppReady = (fontsLoaded || !!fontError) && hydrated;
-  const theme = THEMES[themeMode];
+  const theme = useMemo(() => resolveTheme(settings), [settings]);
 
-  // Sync native OS root window background with active theme
+  // Sync native OS root window background & haptics setting
   useEffect(() => {
     if (!hydrated) return;
+    setHapticsEnabled(settings.hapticsEnabled);
     SystemUI.setBackgroundColorAsync(theme.bg).catch(() => {});
-  }, [hydrated, theme.bg]);
+  }, [hydrated, settings.hapticsEnabled, theme.bg]);
 
-  // Subtle GPU-accelerated tab fade so switching channels feels fluid
   const handleSelectTab = useCallback(
     (tab: TabKey) => {
       if (tab === activeTab) return;
-      tabOpacity.setValue(0.86);
+      tabOpacity.setValue(0.88);
       setActiveTab(tab);
       Animated.timing(tabOpacity, {
         toValue: 1,
@@ -192,30 +191,25 @@ function AppShell() {
         }).start(({ finished }) => {
           if (finished) setToastMsg(null);
         });
-      }, 2100);
+      }, 2200);
     },
     [toastAnim]
   );
 
+  const handleUpdateSettings = useCallback((next: AppSettings) => {
+    setSettings(next);
+    setHapticsEnabled(next.hapticsEnabled);
+    saveAppSettings(next);
+  }, []);
+
   const handleToggleTheme = useCallback(() => {
-    setThemeMode((prev) => {
-      const next: ThemeMode = prev === 'paper' ? 'charcoal' : 'paper';
-      saveThemeMode(next);
+    setSettings((prev) => {
+      const nextMode: ThemeMode =
+        prev.themeMode === 'paper' ? 'charcoal' : 'paper';
+      const next = { ...prev, themeMode: nextMode };
+      saveAppSettings(next);
       return next;
     });
-  }, []);
-
-  const handleChangeRawText = useCallback((text: string) => {
-    setRawText(text);
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => {
-      saveDraftInput(text);
-    }, 350);
-  }, []);
-
-  const handleChangeNormOptions = useCallback((opts: NormalizerOptions) => {
-    setNormOptions(opts);
-    saveNormalizerOptions(opts);
   }, []);
 
   const handleSaveSnippets = useCallback((items: SnippetItem[]) => {
@@ -228,14 +222,42 @@ function AppShell() {
     saveQrHistory(items);
   }, []);
 
+  const handleClearQrHistory = useCallback(() => {
+    setQrHistory([]);
+    saveQrHistory([]);
+  }, []);
+
+  const handleImportBackup = useCallback(
+    (
+      restoredSnippets: SnippetItem[],
+      restoredHistory: QrHistoryItem[],
+      restoredSettings?: Partial<AppSettings>
+    ) => {
+      setSnippets(restoredSnippets);
+      saveSnippets(restoredSnippets);
+      setQrHistory(restoredHistory);
+      saveQrHistory(restoredHistory);
+      if (restoredSettings) {
+        setSettings((prev) => {
+          const next = { ...prev, ...restoredSettings };
+          setHapticsEnabled(next.hapticsEnabled);
+          saveAppSettings(next);
+          return next;
+        });
+      }
+    },
+    []
+  );
+
   const handleQuickSaveToVault = useCallback(
-    (title: string, content: string) => {
+    (title: string, content: string, imageUri?: string) => {
       const now = Date.now();
       const item: SnippetItem = {
         id: `snp-${now}-${Math.random().toString(36).slice(2, 6)}`,
         title: title || 'Mục lưu nhanh',
         content,
-        category: 'other',
+        imageUri,
+        category: imageUri ? 'bank' : 'other',
         pinned: false,
         sensitive: false,
         copyCount: 0,
@@ -264,16 +286,6 @@ function AppShell() {
     setQrInitialGenText(undefined);
   }, []);
 
-  const handleSendToFilter = useCallback(
-    (text: string) => {
-      handleChangeRawText(text);
-      handleSelectTab('filter');
-      notify('Đã chuyển sang Lọc dữ liệu (03)');
-    },
-    [handleChangeRawText, handleSelectTab, notify]
-  );
-
-  // Hold native splash screen cleanly while fonts + storage finish loading (prevents launch flicker)
   if (!isAppReady) {
     if (Platform.OS !== 'web') {
       return null;
@@ -331,7 +343,6 @@ function AppShell() {
                 onSaveSnippets={handleSaveSnippets}
                 onNotify={notify}
                 onSendToQr={handleSendToQr}
-                onSendToFilter={handleSendToFilter}
               />
             </View>
 
@@ -350,25 +361,41 @@ function AppShell() {
                 onConsumeInitialGenText={handleConsumeInitialGenText}
                 onNotify={notify}
                 onSaveToVault={handleQuickSaveToVault}
-                onSendToFilter={handleSendToFilter}
               />
             </View>
 
             <View
               style={[
                 styles.tabPane,
-                activeTab !== 'filter' && styles.hiddenPane,
+                activeTab !== 'ocr' && styles.hiddenPane,
               ]}
             >
-              <FilterScreen
+              <OcrScreen
                 theme={theme}
-                rawText={rawText}
-                onChangeRawText={handleChangeRawText}
-                options={normOptions}
-                onChangeOptions={handleChangeNormOptions}
+                isActive={activeTab === 'ocr'}
+                defaultLang={settings.defaultOcrLang}
+                autoNormalize={settings.autoNormalizeOcr}
                 onNotify={notify}
                 onSaveToVault={handleQuickSaveToVault}
                 onSendToQr={handleSendToQr}
+              />
+            </View>
+
+            <View
+              style={[
+                styles.tabPane,
+                activeTab !== 'settings' && styles.hiddenPane,
+              ]}
+            >
+              <SettingsScreen
+                theme={theme}
+                settings={settings}
+                onUpdateSettings={handleUpdateSettings}
+                snippets={snippets}
+                qrHistory={qrHistory}
+                onImportBackup={handleImportBackup}
+                onClearQrHistory={handleClearQrHistory}
+                onNotify={notify}
               />
             </View>
 

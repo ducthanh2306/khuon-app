@@ -1,4 +1,5 @@
 import { ParsedQrPayload } from '../types/app';
+import { removeVietnameseTones } from './textTools';
 
 export const VIETNAM_BANK_BINS: Record<string, { short: string; name: string }> = {
   '970436': { short: 'VCB', name: 'Vietcombank' },
@@ -197,4 +198,74 @@ export function buildWifiQrString(ssid: string, password: string, security: 'WPA
     return `WIFI:T:nopass;S:${esc(ssid)};;`;
   }
   return `WIFI:T:${security};S:${esc(ssid)};P:${esc(password)};;`;
+}
+
+function formatTlv(tag: string, value: string): string {
+  return `${tag}${String(value.length).padStart(2, '0')}${value}`;
+}
+
+export function computeCrc16Ccitt(payload: string): string {
+  let crc = 0xffff;
+  for (let i = 0; i < payload.length; i += 1) {
+    crc ^= (payload.charCodeAt(i) & 0xff) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xffff;
+      } else {
+        crc = (crc << 1) & 0xffff;
+      }
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+export interface BuildVietQrInput {
+  bankBin: string;
+  accountNumber: string;
+  amount?: string;
+  purpose?: string;
+}
+
+export function buildVietQrString({
+  bankBin,
+  accountNumber,
+  amount,
+  purpose,
+}: BuildVietQrInput): string {
+  const cleanBin = bankBin.trim();
+  const cleanAcc = accountNumber.trim().replace(/\s+/g, '');
+  if (!cleanBin || !cleanAcc) return '';
+
+  const cleanAmount = (amount ?? '').replace(/[^\d]/g, '').replace(/^0+/, '');
+  const rawPurpose = (purpose ?? '').trim();
+  const cleanPurpose = rawPurpose
+    ? removeVietnameseTones(rawPurpose)
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 99)
+    : '';
+
+  const beneficiary = formatTlv('00', cleanBin) + formatTlv('01', cleanAcc);
+  const merchantAccount =
+    formatTlv('00', 'A000000727') +
+    formatTlv('01', beneficiary) +
+    formatTlv('02', 'QRIBFTTA');
+
+  let payload =
+    formatTlv('00', '01') +
+    formatTlv('01', cleanAmount ? '12' : '11') +
+    formatTlv('38', merchantAccount) +
+    formatTlv('53', '704');
+
+  if (cleanAmount) {
+    payload += formatTlv('54', cleanAmount);
+  }
+  payload += formatTlv('58', 'VN');
+  if (cleanPurpose) {
+    payload += formatTlv('62', formatTlv('08', cleanPurpose));
+  }
+
+  const withCrcPrefix = `${payload}6304`;
+  return withCrcPrefix + computeCrc16Ccitt(withCrcPrefix);
 }

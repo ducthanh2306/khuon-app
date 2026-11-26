@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "KHUÔN — Text, Vault & QR",
+    "name": "KHUÔN — Kho Mã, QR & OCR",
     "slug": "khuon-app",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -42,11 +42,31 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "KHUÔN sử dụng camera để quét mã QR, VietQR và Wi-Fi QR.",
+          "cameraPermission": "KHUÔN sử dụng camera để quét mã QR, VietQR và chụp ảnh OCR.",
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "KHUÔN cần quyền truy cập thư viện ảnh để lưu ảnh vào Kho Mã, quét QR và nhận diện chữ OCR.",
+          "cameraPermission": "KHUÔN sử dụng camera để chụp ảnh lưu vào Kho Mã và quét chữ OCR."
+        }
+      ],
+      [
+        "rn-mlkit-ocr",
+        {
+          "ocrModels": [
+            "latin",
+            "chinese",
+            "japanese",
+            "korean"
+          ],
+          "ocrUseBundled": true
+        }
+      ],
+      "./plugins/withWindowsCmakeFix",
       "expo-font"
     ],
     "web": {

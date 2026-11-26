@@ -1,8 +1,14 @@
 import { Platform } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
+let hapticsEnabled = true;
+
+export function setHapticsEnabled(enabled: boolean): void {
+  hapticsEnabled = enabled;
+}
+
 export async function hapticTap(weight: 'light' | 'medium' = 'light'): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (!hapticsEnabled || Platform.OS === 'web') return;
   try {
     await Haptics.impactAsync(
       weight === 'medium'
@@ -15,7 +21,7 @@ export async function hapticTap(weight: 'light' | 'medium' = 'light'): Promise<v
 }
 
 export async function hapticSuccess(): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (!hapticsEnabled || Platform.OS === 'web') return;
   try {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   } catch {

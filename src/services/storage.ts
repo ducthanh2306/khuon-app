@@ -1,17 +1,20 @@
 import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  AppSettings,
   NormalizerOptions,
   QrHistoryItem,
   SnippetItem,
   ThemeMode,
 } from '../types/app';
 import { DEFAULT_NORMALIZER_OPTIONS } from '../engines/textNormalizer';
+import { createDefaultSettings } from '../theme/tokens';
 
 const KEYS = {
   snippets: '@khuon/snippets_v1',
   qrHistory: '@khuon/qr_history_v1',
   theme: '@khuon/theme_v1',
+  settings: '@khuon/settings_v1',
   normalizerOptions: '@khuon/norm_opts_v1',
   draftInput: '@khuon/draft_input_v1',
 };
@@ -113,6 +116,31 @@ export async function saveThemeMode(mode: ThemeMode): Promise<void> {
   await AsyncStorage.setItem(KEYS.theme, mode);
 }
 
+export async function loadAppSettings(): Promise<AppSettings> {
+  const fallbackMode: ThemeMode =
+    Appearance.getColorScheme() === 'dark' ? 'charcoal' : 'paper';
+  const defaults = createDefaultSettings(fallbackMode);
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.settings);
+    if (raw) {
+      return { ...defaults, ...JSON.parse(raw) };
+    }
+    // Migrate legacy theme preference if present
+    const legacyTheme = await AsyncStorage.getItem(KEYS.theme);
+    if (legacyTheme === 'charcoal' || legacyTheme === 'paper') {
+      return { ...defaults, themeMode: legacyTheme };
+    }
+    return defaults;
+  } catch {
+    return defaults;
+  }
+}
+
+export async function saveAppSettings(settings: AppSettings): Promise<void> {
+  await AsyncStorage.setItem(KEYS.settings, JSON.stringify(settings));
+  await AsyncStorage.setItem(KEYS.theme, settings.themeMode);
+}
+
 export async function loadNormalizerOptions(): Promise<NormalizerOptions> {
   try {
     const raw = await AsyncStorage.getItem(KEYS.normalizerOptions);
@@ -140,7 +168,7 @@ export async function saveDraftInput(text: string): Promise<void> {
 }
 
 export interface HydratedAppState {
-  themeMode: ThemeMode;
+  settings: AppSettings;
   snippets: SnippetItem[];
   qrHistory: QrHistoryItem[];
   normOptions: NormalizerOptions;
@@ -148,13 +176,13 @@ export interface HydratedAppState {
 }
 
 export async function hydrateAppState(): Promise<HydratedAppState> {
-  const [themeMode, snippets, qrHistory, normOptions, draftInput] =
+  const [settings, snippets, qrHistory, normOptions, draftInput] =
     await Promise.all([
-      loadThemeMode(),
+      loadAppSettings(),
       loadSnippets(),
       loadQrHistory(),
       loadNormalizerOptions(),
       loadDraftInput(),
     ]);
-  return { themeMode, snippets, qrHistory, normOptions, draftInput };
+  return { settings, snippets, qrHistory, normOptions, draftInput };
 }

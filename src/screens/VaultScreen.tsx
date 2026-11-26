@@ -1,6 +1,7 @@
 import React, { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import {
   FlatList,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -11,20 +12,23 @@ import {
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import {
+  Camera,
   Copy,
   Edit3,
   Eye,
   EyeOff,
+  Image as ImageIcon,
+  Maximize2,
   Pin,
   Plus,
   QrCode,
   Search,
-  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react-native';
-import { FONTS, RADII, ThemePalette } from '../theme/tokens';
+import { FONTS, RADII, ThemePalette, scaleFont } from '../theme/tokens';
 import { SnippetCategory, SnippetItem } from '../types/app';
 import {
   extractTemplateVariables,
@@ -35,6 +39,7 @@ import {
 import { TactileButton } from '../components/TactileButton';
 import { HardwareToggle } from '../components/HardwareToggle';
 import { hapticSuccess, hapticTap } from '../services/haptics';
+import { deleteVaultImage, persistVaultImage } from '../services/imageVault';
 
 const CATEGORY_META: Record<SnippetCategory, { label: string; code: string }> = {
   bank: { label: 'Ngân hàng', code: 'BANK' },
@@ -51,11 +56,11 @@ interface VaultScreenProps {
   onSaveSnippets: (items: SnippetItem[]) => void;
   onNotify: (msg: string) => void;
   onSendToQr: (text: string) => void;
-  onSendToFilter: (text: string) => void;
 }
 
 function maskSnippetText(text: string): string {
   const clean = text.trim();
+  if (!clean) return '';
   if (clean.length <= 4) return '••••';
   return `${'•'.repeat(Math.min(12, clean.length - 4))} ${clean.slice(-4)}`;
 }
@@ -71,10 +76,11 @@ interface SnippetRowProps {
   isRevealed: boolean;
   theme: ThemePalette;
   onTap: (item: SnippetItem, vars: string[]) => void;
+  onCopyText: (item: SnippetItem, vars: string[]) => void;
+  onOpenImage: (item: SnippetItem) => void;
   onToggleReveal: (id: string) => void;
   onTogglePin: (id: string) => void;
   onSendToQr: (text: string) => void;
-  onSendToFilter: (text: string) => void;
   onEdit: (item: SnippetItem) => void;
   onDelete: (id: string) => void;
 }
@@ -84,14 +90,17 @@ const SnippetRow = React.memo(function SnippetRow({
   isRevealed,
   theme,
   onTap,
+  onCopyText,
+  onOpenImage,
   onToggleReveal,
   onTogglePin,
   onSendToQr,
-  onSendToFilter,
   onEdit,
   onDelete,
 }: SnippetRowProps) {
   const { item, vars } = entry;
+  const hasImage = !!item.imageUri;
+  const hasText = item.content.trim().length > 0;
   const displayBody =
     item.sensitive && !isRevealed ? maskSnippetText(item.content) : item.content;
 
@@ -120,6 +129,20 @@ const SnippetRow = React.memo(function SnippetRow({
           >
             {CATEGORY_META[item.category].code}
           </Text>
+          {hasImage ? (
+            <Text
+              style={[
+                styles.imgBadge,
+                {
+                  borderColor: theme.accent,
+                  color: theme.accent,
+                  backgroundColor: theme.accentSoft,
+                },
+              ]}
+            >
+              ẢNH
+            </Text>
+          ) : null}
           {item.pinned ? (
             <Text style={[styles.pinBadge, { color: theme.accent }]}>
               ● GHIM
@@ -137,32 +160,103 @@ const SnippetRow = React.memo(function SnippetRow({
         </Text>
       </View>
 
-      <Text style={[styles.rowTitle, { color: theme.ink }]}>{item.title}</Text>
-      <Text
-        numberOfLines={3}
-        style={[
-          styles.rowBody,
-          {
-            color: theme.inkSecondary,
-            fontFamily:
-              item.category === 'code' || item.sensitive
-                ? FONTS.monoRegular
-                : FONTS.sansRegular,
-          },
-        ]}
-      >
-        {displayBody}
-      </Text>
+      <View style={styles.rowMain}>
+        <View style={styles.rowTextCol}>
+          <Text
+            style={[
+              styles.rowTitle,
+              {
+                color: theme.ink,
+                fontFamily: theme.uiFontSemiBold,
+                fontSize: scaleFont(14.5, theme),
+              },
+            ]}
+          >
+            {item.title}
+          </Text>
+          {hasText ? (
+            <Text
+              numberOfLines={3}
+              style={[
+                styles.rowBody,
+                {
+                  color: theme.inkSecondary,
+                  fontSize: scaleFont(13, theme),
+                  lineHeight: scaleFont(19, theme),
+                  fontFamily:
+                    item.category === 'code' || item.sensitive
+                      ? FONTS.monoRegular
+                      : theme.uiFontRegular,
+                },
+              ]}
+            >
+              {displayBody}
+            </Text>
+          ) : (
+            <Text
+              style={[
+                styles.rowBody,
+                {
+                  color: theme.inkMuted,
+                  fontFamily: theme.uiFontRegular,
+                  fontSize: scaleFont(12.5, theme),
+                },
+              ]}
+            >
+              Chạm để mở ảnh toàn màn hình
+            </Text>
+          )}
+        </View>
+
+        {hasImage ? (
+          <Pressable
+            onPress={() => onOpenImage(item)}
+            style={[
+              styles.thumbBox,
+              { borderColor: theme.border, backgroundColor: theme.well },
+            ]}
+          >
+            {item.sensitive && !isRevealed ? (
+              <View style={styles.thumbMasked}>
+                <EyeOff size={18} color={theme.inkMuted} />
+              </View>
+            ) : (
+              <Image
+                source={{ uri: item.imageUri }}
+                style={styles.thumbImg}
+                resizeMode="cover"
+              />
+            )}
+          </Pressable>
+        ) : null}
+      </View>
 
       <View style={styles.rowActions}>
         <View style={styles.copyHintWrap}>
-          <Copy size={12} color={theme.accent} strokeWidth={1.8} />
+          {hasImage ? (
+            <Maximize2 size={12} color={theme.accent} strokeWidth={1.8} />
+          ) : (
+            <Copy size={12} color={theme.accent} strokeWidth={1.8} />
+          )}
           <Text style={[styles.copyHint, { color: theme.accent }]}>
-            {vars.length > 0 ? 'ĐIỀN BIẾN & COPY' : 'CHẠM ĐỂ COPY'}
+            {hasImage
+              ? 'CHẠM ĐỂ XEM ẢNH'
+              : vars.length > 0
+                ? 'ĐIỀN BIẾN & COPY'
+                : 'CHẠM ĐỂ COPY'}
           </Text>
         </View>
 
         <View style={styles.iconActions}>
+          {hasImage && hasText ? (
+            <Pressable
+              onPress={() => onCopyText(item, vars)}
+              hitSlop={8}
+              style={styles.iconBtn}
+            >
+              <Copy size={15} color={theme.inkSecondary} />
+            </Pressable>
+          ) : null}
           {item.sensitive ? (
             <Pressable
               onPress={() => onToggleReveal(item.id)}
@@ -186,20 +280,15 @@ const SnippetRow = React.memo(function SnippetRow({
               color={item.pinned ? theme.accent : theme.inkMuted}
             />
           </Pressable>
-          <Pressable
-            onPress={() => onSendToQr(item.content)}
-            hitSlop={8}
-            style={styles.iconBtn}
-          >
-            <QrCode size={15} color={theme.inkSecondary} />
-          </Pressable>
-          <Pressable
-            onPress={() => onSendToFilter(item.content)}
-            hitSlop={8}
-            style={styles.iconBtn}
-          >
-            <SlidersHorizontal size={14} color={theme.inkSecondary} />
-          </Pressable>
+          {hasText ? (
+            <Pressable
+              onPress={() => onSendToQr(item.content)}
+              hitSlop={8}
+              style={styles.iconBtn}
+            >
+              <QrCode size={15} color={theme.inkSecondary} />
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={() => onEdit(item)}
             hitSlop={8}
@@ -226,19 +315,23 @@ export const VaultScreen = React.memo(function VaultScreen({
   onSaveSnippets,
   onNotify,
   onSendToQr,
-  onSendToFilter,
 }: VaultScreenProps) {
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [activeCat, setActiveCat] = useState<'all' | SnippetCategory>('all');
   const [revealedIds, setRevealedIds] = useState<Record<string, boolean>>({});
 
+  // Image lightbox state
+  const [viewerItem, setViewerItem] = useState<SnippetItem | null>(null);
+
   // Editor modal state
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formTitle, setFormTitle] = useState('');
   const [formContent, setFormContent] = useState('');
-  const [formCat, setFormCat] = useState<SnippetCategory>('code');
+  const [formImageUri, setFormImageUri] = useState<string | undefined>(undefined);
+  const [savingImage, setSavingImage] = useState(false);
+  const [formCat, setFormCat] = useState<SnippetCategory>('bank');
   const [formPinned, setFormPinned] = useState(false);
   const [formSensitive, setFormSensitive] = useState(false);
 
@@ -247,7 +340,6 @@ export const VaultScreen = React.memo(function VaultScreen({
   const [templateVars, setTemplateVars] = useState<string[]>([]);
   const [templateValues, setTemplateValues] = useState<Record<string, string>>({});
 
-  // Pre-index normalized search strings, template variables, and category counts once per snippets change
   const { indexedSnippets, categoryCounts } = useMemo(() => {
     const counts: Record<SnippetCategory, number> = {
       bank: 0,
@@ -294,7 +386,7 @@ export const VaultScreen = React.memo(function VaultScreen({
     [snippets, onSaveSnippets]
   );
 
-  const handleTapSnippet = useCallback(
+  const handleCopyText = useCallback(
     async (item: SnippetItem, vars: string[]) => {
       if (vars.length > 0) {
         const initial: Record<string, string> = {};
@@ -307,13 +399,34 @@ export const VaultScreen = React.memo(function VaultScreen({
         hapticTap('light');
         return;
       }
-
+      if (!item.content.trim()) return;
       await Clipboard.setStringAsync(item.content);
       bumpCopyCount(item.id);
       hapticSuccess();
       onNotify(`Đã copy: ${item.title}`);
     },
     [bumpCopyCount, onNotify]
+  );
+
+  const handleOpenImage = useCallback(
+    (item: SnippetItem) => {
+      if (!item.imageUri) return;
+      hapticTap('light');
+      setViewerItem(item);
+      bumpCopyCount(item.id);
+    },
+    [bumpCopyCount]
+  );
+
+  const handleTapSnippet = useCallback(
+    async (item: SnippetItem, vars: string[]) => {
+      if (item.imageUri) {
+        handleOpenImage(item);
+        return;
+      }
+      await handleCopyText(item, vars);
+    },
+    [handleOpenImage, handleCopyText]
   );
 
   const handleToggleReveal = useCallback((id: string) => {
@@ -337,7 +450,8 @@ export const VaultScreen = React.memo(function VaultScreen({
     setEditingId(null);
     setFormTitle('');
     setFormContent('');
-    setFormCat('code');
+    setFormImageUri(undefined);
+    setFormCat('bank');
     setFormPinned(false);
     setFormSensitive(false);
     setEditorOpen(true);
@@ -347,25 +461,74 @@ export const VaultScreen = React.memo(function VaultScreen({
     setEditingId(item.id);
     setFormTitle(item.title);
     setFormContent(item.content);
+    setFormImageUri(item.imageUri);
     setFormCat(item.category);
     setFormPinned(item.pinned);
     setFormSensitive(item.sensitive);
     setEditorOpen(true);
   }, []);
 
+  const handleAttachFromGallery = async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.92,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      const asset = res.assets[0];
+      setSavingImage(true);
+      const storedUri = await persistVaultImage(asset.uri, asset.width);
+      setFormImageUri(storedUri);
+      hapticSuccess();
+    } catch {
+      onNotify('Không thể chọn ảnh từ thư viện');
+    } finally {
+      setSavingImage(false);
+    }
+  };
+
+  const handleAttachFromCamera = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        onNotify('Cần cấp quyền camera để chụp ảnh đính kèm');
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.9,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      const asset = res.assets[0];
+      setSavingImage(true);
+      const storedUri = await persistVaultImage(asset.uri, asset.width);
+      setFormImageUri(storedUri);
+      hapticSuccess();
+    } catch {
+      onNotify('Không mở được camera trên thiết bị này');
+    } finally {
+      setSavingImage(false);
+    }
+  };
+
   const handleSaveForm = () => {
-    if (!formTitle.trim() || !formContent.trim()) {
-      onNotify('Vui lòng nhập tiêu đề và nội dung');
+    if (!formTitle.trim() || (!formContent.trim() && !formImageUri)) {
+      onNotify('Hãy nhập tiêu đề và nội dung hoặc chọn ảnh đính kèm');
       return;
     }
     const now = Date.now();
     if (editingId) {
+      const oldItem = snippets.find((s) => s.id === editingId);
+      if (oldItem?.imageUri && oldItem.imageUri !== formImageUri) {
+        deleteVaultImage(oldItem.imageUri);
+      }
       const next = snippets.map((s) =>
         s.id === editingId
           ? {
               ...s,
               title: formTitle.trim(),
               content: formContent,
+              imageUri: formImageUri,
               category: formCat,
               pinned: formPinned,
               sensitive: formSensitive,
@@ -380,6 +543,7 @@ export const VaultScreen = React.memo(function VaultScreen({
         id: `snp-${now}-${Math.random().toString(36).slice(2, 6)}`,
         title: formTitle.trim(),
         content: formContent,
+        imageUri: formImageUri,
         category: formCat,
         pinned: formPinned,
         sensitive: formSensitive,
@@ -407,6 +571,10 @@ export const VaultScreen = React.memo(function VaultScreen({
   const deleteSnippet = useCallback(
     (id: string) => {
       hapticTap('medium');
+      const target = snippets.find((s) => s.id === id);
+      if (target?.imageUri) {
+        deleteVaultImage(target.imageUri);
+      }
       onSaveSnippets(snippets.filter((s) => s.id !== id));
       onNotify('Đã xóa khỏi Kho Mã');
     },
@@ -434,7 +602,14 @@ export const VaultScreen = React.memo(function VaultScreen({
             onChangeText={setQuery}
             placeholder="Tìm nhanh (gõ không dấu OK)..."
             placeholderTextColor={theme.inkMuted}
-            style={[styles.searchInput, { color: theme.ink }]}
+            style={[
+              styles.searchInput,
+              {
+                color: theme.ink,
+                fontFamily: theme.uiFontRegular,
+                fontSize: scaleFont(13, theme),
+              },
+            ]}
           />
           {query ? (
             <Pressable onPress={() => setQuery('')}>
@@ -528,11 +703,29 @@ export const VaultScreen = React.memo(function VaultScreen({
         removeClippedSubviews={Platform.OS === 'android'}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
-            <Text style={[styles.emptyTitle, { color: theme.ink }]}>
+            <Text
+              style={[
+                styles.emptyTitle,
+                {
+                  color: theme.ink,
+                  fontFamily: theme.uiFontSemiBold,
+                  fontSize: scaleFont(15, theme),
+                },
+              ]}
+            >
               Không có mục nào khớp
             </Text>
-            <Text style={[styles.emptyDesc, { color: theme.inkMuted }]}>
-              Bấm "+ THÊM" để lưu số tài khoản, mã lệnh, mật khẩu Wi-Fi hoặc mẫu trả lời có biến số.
+            <Text
+              style={[
+                styles.emptyDesc,
+                {
+                  color: theme.inkMuted,
+                  fontFamily: theme.uiFontRegular,
+                  fontSize: scaleFont(13, theme),
+                },
+              ]}
+            >
+              Bấm "+ THÊM" để lưu số tài khoản, ảnh QR ngân hàng, mã lệnh hoặc mẫu trả lời.
             </Text>
           </View>
         }
@@ -542,15 +735,117 @@ export const VaultScreen = React.memo(function VaultScreen({
             isRevealed={!!revealedIds[entry.item.id]}
             theme={theme}
             onTap={handleTapSnippet}
+            onCopyText={handleCopyText}
+            onOpenImage={handleOpenImage}
             onToggleReveal={handleToggleReveal}
             onTogglePin={togglePin}
             onSendToQr={onSendToQr}
-            onSendToFilter={onSendToFilter}
             onEdit={openEditModal}
             onDelete={deleteSnippet}
           />
         )}
       />
+
+      {/* Full Image Lightbox Modal (great for Shipper / Bank QR scanning) */}
+      <Modal
+        visible={!!viewerItem}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setViewerItem(null)}
+      >
+        <View style={styles.viewerOverlay}>
+          <View
+            style={[
+              styles.viewerCard,
+              { backgroundColor: theme.surface, borderColor: theme.border },
+            ]}
+          >
+            <View
+              style={[styles.modalHeader, { borderBottomColor: theme.border }]}
+            >
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.viewerTitle,
+                    {
+                      color: theme.ink,
+                      fontFamily: theme.uiFontBold,
+                      fontSize: scaleFont(14, theme),
+                    },
+                  ]}
+                >
+                  {viewerItem?.title}
+                </Text>
+              </View>
+              <Pressable onPress={() => setViewerItem(null)} hitSlop={10}>
+                <X size={20} color={theme.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.viewerImageFrame}>
+              {viewerItem?.imageUri ? (
+                <Image
+                  source={{ uri: viewerItem.imageUri }}
+                  style={styles.viewerImage}
+                  resizeMode="contain"
+                />
+              ) : null}
+            </View>
+
+            {viewerItem?.content.trim() ? (
+              <View
+                style={[
+                  styles.viewerTextBox,
+                  { backgroundColor: theme.well, borderTopColor: theme.border },
+                ]}
+              >
+                <Text
+                  selectable
+                  style={[
+                    styles.viewerText,
+                    {
+                      color: theme.ink,
+                      fontFamily: theme.uiFontRegular,
+                      fontSize: scaleFont(13, theme),
+                    },
+                  ]}
+                >
+                  {viewerItem.content}
+                </Text>
+              </View>
+            ) : null}
+
+            <View
+              style={[styles.modalFooter, { borderTopColor: theme.border }]}
+            >
+              {viewerItem?.content.trim() ? (
+                <TactileButton
+                  label="COPY NỘI DUNG"
+                  theme={theme}
+                  variant="primary"
+                  mono
+                  icon={<Copy size={13} color={theme.accentInk} />}
+                  onPress={async () => {
+                    if (!viewerItem) return;
+                    const vars = extractTemplateVariables(viewerItem.content);
+                    setViewerItem(null);
+                    await handleCopyText(viewerItem, vars);
+                  }}
+                  style={{ flex: 1 }}
+                />
+              ) : null}
+              <TactileButton
+                label="ĐÓNG"
+                theme={theme}
+                mono
+                onPress={() => setViewerItem(null)}
+                style={!viewerItem?.content.trim() ? { flex: 1 } : undefined}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Create / Edit Snippet Modal */}
       <Modal
@@ -587,7 +882,7 @@ export const VaultScreen = React.memo(function VaultScreen({
               <TextInput
                 value={formTitle}
                 onChangeText={setFormTitle}
-                placeholder="VD: Số tài khoản VCB, Lệnh Git, Mẫu báo giá..."
+                placeholder="VD: QR Ngân hàng MB, Số tài khoản VCB..."
                 placeholderTextColor={theme.inkMuted}
                 style={[
                   styles.fieldInput,
@@ -595,6 +890,7 @@ export const VaultScreen = React.memo(function VaultScreen({
                     backgroundColor: theme.well,
                     borderColor: theme.border,
                     color: theme.ink,
+                    fontFamily: theme.uiFontRegular,
                   },
                 ]}
               />
@@ -622,7 +918,10 @@ export const VaultScreen = React.memo(function VaultScreen({
                       <Text
                         style={[
                           styles.catSelectText,
-                          { color: active ? theme.accent : theme.ink },
+                          {
+                            color: active ? theme.accent : theme.ink,
+                            fontFamily: theme.uiFontMedium,
+                          },
                         ]}
                       >
                         {CATEGORY_META[cat].label}
@@ -632,16 +931,70 @@ export const VaultScreen = React.memo(function VaultScreen({
                 })}
               </View>
 
+              {/* Image Attachment Section */}
+              <Text style={[styles.fieldLabel, { color: theme.inkMuted }]}>
+                ẢNH ĐÍNH KÈM (QR NGÂN HÀNG / THẺ / GIẤY TỜ)
+              </Text>
+              <View style={styles.attachRow}>
+                <TactileButton
+                  label={savingImage ? 'ĐANG XỬ LÝ...' : 'CHỌN ẢNH'}
+                  theme={theme}
+                  size="sm"
+                  mono
+                  disabled={savingImage}
+                  icon={<ImageIcon size={13} color={theme.ink} />}
+                  onPress={handleAttachFromGallery}
+                  style={{ flex: 1 }}
+                />
+                {Platform.OS !== 'web' ? (
+                  <TactileButton
+                    label="CHỤP ẢNH"
+                    theme={theme}
+                    size="sm"
+                    mono
+                    disabled={savingImage}
+                    icon={<Camera size={13} color={theme.ink} />}
+                    onPress={handleAttachFromCamera}
+                    style={{ flex: 1 }}
+                  />
+                ) : null}
+                {formImageUri ? (
+                  <TactileButton
+                    label="GỠ ẢNH"
+                    theme={theme}
+                    variant="danger"
+                    size="sm"
+                    mono
+                    onPress={() => setFormImageUri(undefined)}
+                  />
+                ) : null}
+              </View>
+
+              {formImageUri ? (
+                <View
+                  style={[
+                    styles.attachPreviewWrap,
+                    { backgroundColor: theme.well, borderColor: theme.border },
+                  ]}
+                >
+                  <Image
+                    source={{ uri: formImageUri }}
+                    style={styles.attachPreviewImg}
+                    resizeMode="contain"
+                  />
+                </View>
+              ) : null}
+
               <View style={styles.contentLabelRow}>
                 <Text style={[styles.fieldLabel, { color: theme.inkMuted }]}>
-                  NỘI DUNG (DÙNG {`{{biến}}`} ĐỂ TẠO MẪU ĐỘNG)
+                  NỘI DUNG CHỮ (TÙY CHỌN NẾU ĐÃ CÓ ẢNH)
                 </Text>
               </View>
               <TextInput
                 multiline
                 value={formContent}
                 onChangeText={setFormContent}
-                placeholder="Nhập đoạn mã hoặc nội dung thường copy..."
+                placeholder="Nhập đoạn mã hoặc để trống nếu chỉ lưu ảnh QR..."
                 placeholderTextColor={theme.inkMuted}
                 textAlignVertical="top"
                 style={[
@@ -650,6 +1003,7 @@ export const VaultScreen = React.memo(function VaultScreen({
                     backgroundColor: theme.well,
                     borderColor: theme.border,
                     color: theme.ink,
+                    fontFamily: theme.uiFontRegular,
                   },
                 ]}
               />
@@ -682,7 +1036,7 @@ export const VaultScreen = React.memo(function VaultScreen({
                 />
                 <HardwareToggle
                   label="Ẩn nội dung nhạy cảm (•••)"
-                  description="Che nội dung trên màn hình, chạm vẫn copy đầy đủ"
+                  description="Che chữ và ảnh xem trước trên danh sách"
                   value={formSensitive}
                   onToggle={setFormSensitive}
                   theme={theme}
@@ -704,6 +1058,7 @@ export const VaultScreen = React.memo(function VaultScreen({
                 theme={theme}
                 variant="primary"
                 mono
+                disabled={savingImage}
                 onPress={handleSaveForm}
                 style={{ flex: 1 }}
               />
@@ -759,6 +1114,7 @@ export const VaultScreen = React.memo(function VaultScreen({
                         backgroundColor: theme.well,
                         borderColor: theme.border,
                         color: theme.ink,
+                        fontFamily: theme.uiFontRegular,
                       },
                     ]}
                   />
@@ -774,7 +1130,12 @@ export const VaultScreen = React.memo(function VaultScreen({
                   { backgroundColor: theme.well, borderColor: theme.border },
                 ]}
               >
-                <Text style={[styles.previewText, { color: theme.ink }]}>
+                <Text
+                  style={[
+                    styles.previewText,
+                    { color: theme.ink, fontFamily: theme.uiFontRegular },
+                  ]}
+                >
                   {templateTarget
                     ? interpolateTemplate(templateTarget.content, templateValues)
                     : ''}
@@ -809,9 +1170,7 @@ export const VaultScreen = React.memo(function VaultScreen({
 });
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
+  root: { flex: 1 },
   searchStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -832,13 +1191,9 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: FONTS.sansRegular,
-    fontSize: 13,
     paddingVertical: 0,
   },
-  catBarWrap: {
-    borderBottomWidth: 1,
-  },
+  catBarWrap: { borderBottomWidth: 1 },
   catBar: {
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -855,24 +1210,16 @@ const styles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 0.6,
   },
-  listScroll: {
-    flex: 1,
-  },
-  listContent: {
-    paddingBottom: 32,
-  },
+  listScroll: { flex: 1 },
+  listContent: { paddingBottom: 32 },
   emptyBox: {
     padding: 32,
     alignItems: 'flex-start',
   },
   emptyTitle: {
-    fontFamily: FONTS.sansSemiBold,
-    fontSize: 15,
     marginBottom: 6,
   },
   emptyDesc: {
-    fontFamily: FONTS.sansRegular,
-    fontSize: 13,
     lineHeight: 20,
   },
   row: {
@@ -889,9 +1236,18 @@ const styles = StyleSheet.create({
   rowTags: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   catBadge: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 9.5,
+    letterSpacing: 0.7,
+    borderWidth: 1,
+    borderRadius: 2,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  imgBadge: {
     fontFamily: FONTS.monoBold,
     fontSize: 9.5,
     letterSpacing: 0.7,
@@ -915,15 +1271,36 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontVariant: ['tabular-nums'],
   },
+  rowMain: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 8,
+  },
+  rowTextCol: {
+    flex: 1,
+  },
   rowTitle: {
-    fontFamily: FONTS.sansSemiBold,
-    fontSize: 14.5,
     marginBottom: 4,
   },
   rowBody: {
-    fontSize: 13,
     lineHeight: 19,
-    marginBottom: 10,
+  },
+  thumbBox: {
+    width: 66,
+    height: 66,
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    overflow: 'hidden',
+  },
+  thumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbMasked: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   rowActions: {
     flexDirection: 'row',
@@ -948,9 +1325,39 @@ const styles = StyleSheet.create({
   iconBtn: {
     padding: 2,
   },
-  miniTextAction: {
-    fontFamily: FONTS.monoBold,
-    fontSize: 11,
+  viewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(10,10,9,0.82)',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  viewerCard: {
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    overflow: 'hidden',
+    maxHeight: '90%',
+  },
+  viewerTitle: {
+    letterSpacing: 0.2,
+  },
+  viewerImageFrame: {
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 280,
+    maxHeight: 440,
+  },
+  viewerImage: {
+    width: '100%',
+    height: 360,
+  },
+  viewerTextBox: {
+    padding: 12,
+    borderTopWidth: 1,
+  },
+  viewerText: {
+    lineHeight: 19,
   },
   modalOverlay: {
     flex: 1,
@@ -961,7 +1368,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderLeftWidth: 1,
     borderRightWidth: 1,
-    maxHeight: '88%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -976,9 +1383,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 0.9,
   },
-  modalBody: {
-    padding: 16,
-  },
+  modalBody: { padding: 16 },
   fieldLabel: {
     fontFamily: FONTS.monoMedium,
     fontSize: 10,
@@ -990,7 +1395,6 @@ const styles = StyleSheet.create({
     borderRadius: RADII.xs,
     paddingHorizontal: 11,
     paddingVertical: 9,
-    fontFamily: FONTS.sansRegular,
     fontSize: 13.5,
     marginBottom: 12,
   },
@@ -1007,8 +1411,25 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   catSelectText: {
-    fontFamily: FONTS.sansMedium,
     fontSize: 12,
+  },
+  attachRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  attachPreviewWrap: {
+    borderWidth: 1,
+    borderRadius: RADII.xs,
+    padding: 8,
+    marginBottom: 12,
+    height: 150,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachPreviewImg: {
+    width: '100%',
+    height: '100%',
   },
   contentLabelRow: {
     flexDirection: 'row',
@@ -1018,8 +1439,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: RADII.xs,
     padding: 11,
-    minHeight: 96,
-    fontFamily: FONTS.sansRegular,
+    minHeight: 84,
     fontSize: 13.5,
     lineHeight: 20,
     marginBottom: 8,
@@ -1053,7 +1473,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   previewText: {
-    fontFamily: FONTS.sansRegular,
     fontSize: 13.5,
     lineHeight: 20,
   },

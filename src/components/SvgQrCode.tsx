@@ -8,12 +8,14 @@ interface SvgQrCodeProps {
   value: string;
   size?: number;
   theme: ThemePalette;
+  svgRef?: React.RefObject<Svg | null>;
 }
 
 export const SvgQrCode = React.memo(function SvgQrCode({
   value,
   size = 200,
   theme,
+  svgRef,
 }: SvgQrCodeProps) {
   const pathData = useMemo(() => {
     const clean = value.trim();
@@ -73,6 +75,7 @@ export const SvgQrCode = React.memo(function SvgQrCode({
   return (
     <View style={[styles.frame, { borderColor: theme.border }]}>
       <Svg
+        ref={svgRef as any}
         width={size}
         height={size}
         viewBox={`0 0 ${viewSize} ${viewSize}`}
